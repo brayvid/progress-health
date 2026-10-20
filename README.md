@@ -6,11 +6,11 @@ Correlate is an iOS app that uncovers hidden connections in your Apple Health da
 
 ### Key Features
 
-* **25+ HealthKit Metrics:** Ingests activity, nutrition, vitals, sleep stages, and body measurements.
-* **Smart Time-Series Engine:** Computes rates of change (e.g. 7-day weight velocity) and time lags (e.g. yesterday's sleep vs. today's resting heart rate) with linear interpolation between intermittent weigh-ins.
+* **25+ HealthKit Metrics:** physical activity, nutrition, vitals and body measurements.
+* **Smart Time-Series Engine:** Computes rates of change (e.g. 7-day velocity) and time lags (e.g. yesterday's sleep vs. today's resting heart rate) with linear interpolation between sparse records.
 * **Automated Insights:** Scans all feature combinations to rank meaningful correlations, automatically filtering out obvious pairs (like Steps vs. Distance).
 * **Interactive Exploration:**
-  * **Search & Filter:** Find connections by metric, polarity (+/-), or feature type (Raw, Rates of Change, Lagged).
+  * **Search & Filter:** Find connections by metric, polarity (+/-), or feature type (Raw, Rate of Change, Lagged).
   * **Swift Charts:** Responsive trends and scatter plots with best-fit linear regression lines fit to your data.
   * **Custom Correlation Tool:** Compare any two metrics or transformed features on demand.
 * **Local & Private:** Runs entirely on-device and caches discoveries locally.
