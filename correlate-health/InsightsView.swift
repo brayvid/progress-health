@@ -28,8 +28,25 @@ struct DiscoveredInsight: Identifiable, Codable {
 
     // Transient catalog properties restored dynamically
     var metricA: HealthMetricType {
-        HealthCatalog.allMetrics.first { $0.id == metricIdA } ??
-        HealthMetricType(
+        if let catalogMetric = HealthCatalog.allMetrics.first(where: { $0.id == metricIdA }) {
+            return catalogMetric
+        }
+        if let comboSpec = LinearCombinationsCatalog.specs.first(where: { $0.id == metricIdA }) {
+            return HealthMetricType(
+                id: comboSpec.id,
+                displayName: comboSpec.displayName,
+                category: .activity,
+                quantityIdentifier: nil,
+                categoryIdentifier: nil,
+                defaultUnit: .count(),
+                unitLabel: comboSpec.unitLabel,
+                aggregation: .cumulativeSum,
+                icon: comboSpec.icon,
+                color: .orange,
+                defaultLineChart: false
+            )
+        }
+        return HealthMetricType(
             id: metricIdA,
             displayName: metricIdA,
             category: .activity,
@@ -45,8 +62,25 @@ struct DiscoveredInsight: Identifiable, Codable {
     }
 
     var metricB: HealthMetricType {
-        HealthCatalog.allMetrics.first { $0.id == metricIdB } ??
-        HealthMetricType(
+        if let catalogMetric = HealthCatalog.allMetrics.first(where: { $0.id == metricIdB }) {
+            return catalogMetric
+        }
+        if let comboSpec = LinearCombinationsCatalog.specs.first(where: { $0.id == metricIdB }) {
+            return HealthMetricType(
+                id: comboSpec.id,
+                displayName: comboSpec.displayName,
+                category: .activity,
+                quantityIdentifier: nil,
+                categoryIdentifier: nil,
+                defaultUnit: .count(),
+                unitLabel: comboSpec.unitLabel,
+                aggregation: .cumulativeSum,
+                icon: comboSpec.icon,
+                color: .orange,
+                defaultLineChart: false
+            )
+        }
+        return HealthMetricType(
             id: metricIdB,
             displayName: metricIdB,
             category: .activity,
@@ -186,6 +220,14 @@ struct InsightFilters {
             return true
         }
 
+        // Prune comparing any linear combination with its direct constituent metrics
+        for spec in LinearCombinationsCatalog.specs {
+            if (metricA == spec.id && spec.constituentMetricIds.contains(metricB)) ||
+               (metricB == spec.id && spec.constituentMetricIds.contains(metricA)) {
+                return true
+            }
+        }
+
         return false
     }
 }
@@ -264,10 +306,32 @@ struct InsightsView: View {
         .lag2Day
     ]
 
+    var allAvailableMetrics: [HealthMetricType] {
+        var list = HealthCatalog.allMetrics
+        for spec in LinearCombinationsCatalog.specs {
+            list.append(
+                HealthMetricType(
+                    id: spec.id,
+                    displayName: spec.displayName,
+                    category: .activity,
+                    quantityIdentifier: nil,
+                    categoryIdentifier: nil,
+                    defaultUnit: .count(),
+                    unitLabel: spec.unitLabel,
+                    aggregation: .cumulativeSum,
+                    icon: spec.icon,
+                    color: .orange,
+                    defaultLineChart: false
+                )
+            )
+        }
+        return list
+    }
+
     var metricSuggestions: [HealthMetricType] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return [] }
-        return HealthCatalog.allMetrics.filter {
+        return allAvailableMetrics.filter {
             $0.displayName.lowercased().contains(query) ||
             $0.id.lowercased().contains(query) ||
             $0.category.rawValue.lowercased().contains(query)
@@ -378,7 +442,7 @@ struct InsightsView: View {
                     VStack(spacing: 16) {
                         ProgressView()
                             .scaleEffect(1.3)
-                        Text("Cross-Correlating Diet, Activity, Vitals & Weight...")
+                        Text("Cross-Correlating Diet, Activity, Vitals & Combinations...")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -389,7 +453,7 @@ struct InsightsView: View {
                             .foregroundColor(.yellow)
                         Text("No Connections Surfaced")
                             .font(.headline)
-                        Text("Tap Scan below to run an exhaustive correlation search across raw dietary intake, activity burn, rates of change, and body mass trajectories.")
+                        Text("Tap Scan below to run an exhaustive correlation search across raw dietary intake, calorie deficits, rates of change, and vitals.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -578,7 +642,7 @@ struct InsightsView: View {
             .searchable(
                 text: $searchText,
                 placement: .navigationBarDrawer(displayMode: .automatic),
-                prompt: "Search metric (e.g. Body Mass, Steps, Calories)"
+                prompt: "Search metric or combo (e.g. Deficit, Carbs, HR)"
             ) {
                 if !metricSuggestions.isEmpty {
                     ForEach(metricSuggestions) { metric in
@@ -629,7 +693,6 @@ struct InsightsView: View {
                 InsightDetailModal(insight: insight)
             }
             .onAppear {
-                // Instantly load cached insights from disk
                 if discoveredInsights.isEmpty {
                     let cached = InsightsPersistence.load()
                     if !cached.isEmpty {
@@ -666,20 +729,21 @@ struct InsightsView: View {
                 return data.count >= 2
             }
 
+            // 1. Process Raw HealthCatalog metrics
             for m in activeMetrics {
                 guard let baseDaily = healthManager.dailySeries[m.id], !baseDaily.isEmpty else { continue }
 
                 let shouldInterpolate = (m.aggregation == .averageDiscrete || m.category == .body)
                 let workingRaw = shouldInterpolate ? TimeSeriesTransforms.linearlyInterpolated(dailySeries: baseDaily) : baseDaily
 
-                // 1. Raw Series
+                // Raw Series
                 candidateFeatures.append((
                     FeatureIdentifier(metricId: m.id, transform: .raw),
                     m,
                     workingRaw
                 ))
 
-                // 2. Computed Derivatives: 1-Day Rate of Change
+                // 1-Day Rate of Change
                 let delta1 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .delta1Day, interpolateGaps: shouldInterpolate)
                 if delta1.count >= 3 {
                     candidateFeatures.append((
@@ -689,7 +753,7 @@ struct InsightsView: View {
                     ))
                 }
 
-                // 3. 7-Day Velocity: Computed for Body Mass, Dietary Energy, Steps, Active Energy, and Vitals
+                // 7-Day Velocity
                 if m.id == "bodyMass" || m.category == .body || m.category == .nutrition || m.category == .activity || m.category == .vitals {
                     let delta7 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .delta7Day, interpolateGaps: shouldInterpolate)
                     if delta7.count >= 3 {
@@ -701,7 +765,7 @@ struct InsightsView: View {
                     }
                 }
 
-                // 4. Time Lags (t-1, t-2, t-7)
+                // Time Lags (t-1, t-2, t-7)
                 let lag1 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .lag1Day, interpolateGaps: shouldInterpolate)
                 if lag1.count >= 3 {
                     candidateFeatures.append((
@@ -730,6 +794,62 @@ struct InsightsView: View {
                 }
             }
 
+            // 2. Synthesize Linear Combinations (Caloric Deficit, Net Carbs, Heart Rate Delta, etc.)
+            for spec in LinearCombinationsCatalog.specs {
+                if let comboDaily = LinearCombinationsCatalog.computeSeries(spec: spec, dailySeries: healthManager.dailySeries) {
+                    let syntheticMetric = HealthMetricType(
+                        id: spec.id,
+                        displayName: spec.displayName,
+                        category: .activity,
+                        quantityIdentifier: nil,
+                        categoryIdentifier: nil,
+                        defaultUnit: .count(),
+                        unitLabel: spec.unitLabel,
+                        aggregation: .cumulativeSum,
+                        icon: spec.icon,
+                        color: .orange,
+                        defaultLineChart: false
+                    )
+
+                    // A. Raw Linear Combination
+                    candidateFeatures.append((
+                        FeatureIdentifier(metricId: spec.id, transform: .raw),
+                        syntheticMetric,
+                        comboDaily
+                    ))
+
+                    // B. 1-Day & 7-Day Derivatives of the Linear Combination
+                    let delta1 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .delta1Day, interpolateGaps: false)
+                    if delta1.count >= 3 {
+                        candidateFeatures.append((
+                            FeatureIdentifier(metricId: spec.id, transform: .delta1Day),
+                            syntheticMetric,
+                            delta1
+                        ))
+                    }
+
+                    let delta7 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .delta7Day, interpolateGaps: false)
+                    if delta7.count >= 3 {
+                        candidateFeatures.append((
+                            FeatureIdentifier(metricId: spec.id, transform: .delta7Day),
+                            syntheticMetric,
+                            delta7
+                        ))
+                    }
+
+                    // C. Lags (t-1, t-2)
+                    let lag1 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .lag1Day, interpolateGaps: false)
+                    if lag1.count >= 3 {
+                        candidateFeatures.append((
+                            FeatureIdentifier(metricId: spec.id, transform: .lag1Day),
+                            syntheticMetric,
+                            lag1
+                        ))
+                    }
+                }
+            }
+
+            // 3. Pairwise Cross-Correlation Matrix
             var results: [DiscoveredInsight] = []
             var seenPairs = Set<String>()
 
@@ -865,8 +985,36 @@ struct InsightDetailModal: View {
     let insight: DiscoveredInsight
     @Environment(\.dismiss) var dismiss
 
+    // Local flip state
+    @State private var isAxesFlipped: Bool = false
+
+    var currentXTitle: String {
+        isAxesFlipped ? insight.titleB : insight.titleA
+    }
+
+    var currentYTitle: String {
+        isAxesFlipped ? insight.titleA : insight.titleB
+    }
+
+    var currentXUnit: String {
+        isAxesFlipped ? insight.metricB.unitLabel : insight.metricA.unitLabel
+    }
+
+    var currentYUnit: String {
+        isAxesFlipped ? insight.metricA.unitLabel : insight.metricB.unitLabel
+    }
+
+    // Active plotted points with optional coordinate swap
+    var activePoints: [(date: Date, x: Double, y: Double)] {
+        if isAxesFlipped {
+            return insight.points.map { ($0.date, $0.y, $0.x) }
+        } else {
+            return insight.points
+        }
+    }
+
     var xDomain: ClosedRange<Double> {
-        let xs = insight.points.map(\.x)
+        let xs = activePoints.map(\.x)
         guard let minVal = xs.min(), let maxVal = xs.max(), minVal != maxVal else {
             let single = xs.first ?? 0
             return (single - 1)...(single + 1)
@@ -876,7 +1024,7 @@ struct InsightDetailModal: View {
     }
 
     var yDomain: ClosedRange<Double> {
-        let ys = insight.points.map(\.y)
+        let ys = activePoints.map(\.y)
         guard let minVal = ys.min(), let maxVal = ys.max(), minVal != maxVal else {
             let single = ys.first ?? 0
             return (single - 1)...(single + 1)
@@ -886,7 +1034,7 @@ struct InsightDetailModal: View {
     }
 
     var regression: (slope: Double, intercept: Double, xMin: Double, xMax: Double)? {
-        let points = insight.points
+        let points = activePoints
         guard points.count >= 2 else { return nil }
         let xs = points.map(\.x)
         let ys = points.map(\.y)
@@ -907,10 +1055,29 @@ struct InsightDetailModal: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    // Summary Card
+                    // Summary Card with Swap Button
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(insight.title)
-                            .font(.title3.bold())
+                        HStack {
+                            Text(isAxesFlipped ? "\(insight.titleB) vs \(insight.titleA)" : insight.title)
+                                .font(.title3.bold())
+                            Spacer()
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isAxesFlipped.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.left.arrow.right")
+                                    Text("Swap X & Y")
+                                }
+                                .font(.caption.bold())
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(8)
+                            }
+                        }
 
                         HStack {
                             Text("Correlation:")
@@ -935,10 +1102,10 @@ struct InsightDetailModal: View {
                             .padding(.horizontal)
 
                         Chart {
-                            ForEach(Array(insight.points.enumerated()), id: \.offset) { _, pt in
+                            ForEach(Array(activePoints.enumerated()), id: \.offset) { _, pt in
                                 PointMark(
-                                    x: .value(insight.titleA, pt.x),
-                                    y: .value(insight.titleB, pt.y)
+                                    x: .value(currentXTitle, pt.x),
+                                    y: .value(currentYTitle, pt.y)
                                 )
                                 .foregroundStyle(Color.blue.opacity(0.7))
                                 .symbolSize(30)
@@ -988,8 +1155,8 @@ struct InsightDetailModal: View {
                                 }
                             }
                         }
-                        .chartXAxisLabel("\(insight.titleA) (\(insight.metricA.unitLabel))", alignment: .center)
-                        .chartYAxisLabel("\(insight.titleB) (\(insight.metricB.unitLabel))", position: .leading)
+                        .chartXAxisLabel("\(currentXTitle) (\(currentXUnit))", alignment: .center)
+                        .chartYAxisLabel("\(currentYTitle) (\(currentYUnit))", position: .leading)
                         .frame(height: 290)
                         .padding()
                         .background(Color(.secondarySystemGroupedBackground))
@@ -1001,8 +1168,8 @@ struct InsightDetailModal: View {
                         Text("Physiological Interpretation")
                             .font(.headline)
 
-                        let m1 = insight.titleA
-                        let m2 = insight.titleB
+                        let m1 = currentXTitle
+                        let m2 = currentYTitle
                         let dir = insight.r > 0 ? "increases" : "decreases"
                         let strength = abs(insight.r) >= 0.6 ? "strong" : "moderate"
 

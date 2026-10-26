@@ -12,21 +12,43 @@ import HealthKit
 struct CorrelationView: View {
     @EnvironmentObject var healthManager: HealthManager
 
-    @State private var metricId1: String = "steps"
+    @State private var metricId1: String = "netCaloricBalance"
     @State private var transform1: TransformType = .raw
 
-    @State private var metricId2: String = "restingHeartRate"
-    @State private var transform2: TransformType = .raw
+    @State private var metricId2: String = "bodyMass"
+    @State private var transform2: TransformType = .delta7Day
 
     @State private var correlationResult: Double? = nil
     @State private var pairedPoints: [(date: Date, x: Double, y: Double)] = []
 
+    var availableMetrics: [HealthMetricType] {
+        var list = HealthCatalog.allMetrics
+        for spec in LinearCombinationsCatalog.specs {
+            list.append(
+                HealthMetricType(
+                    id: spec.id,
+                    displayName: spec.displayName,
+                    category: .activity,
+                    quantityIdentifier: nil,
+                    categoryIdentifier: nil,
+                    defaultUnit: .count(),
+                    unitLabel: spec.unitLabel,
+                    aggregation: .cumulativeSum,
+                    icon: spec.icon,
+                    color: .orange,
+                    defaultLineChart: false
+                )
+            )
+        }
+        return list
+    }
+
     var metric1: HealthMetricType {
-        HealthCatalog.allMetrics.first { $0.id == metricId1 } ?? HealthCatalog.allMetrics[0]
+        availableMetrics.first { $0.id == metricId1 } ?? availableMetrics[0]
     }
 
     var metric2: HealthMetricType {
-        HealthCatalog.allMetrics.first { $0.id == metricId2 } ?? HealthCatalog.allMetrics[1]
+        availableMetrics.first { $0.id == metricId2 } ?? availableMetrics[1]
     }
 
     // Dynamic X scale tightly fit to data points (does not force 0)
@@ -55,65 +77,155 @@ struct CorrelationView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Selector Card
+                    // Variable Selector Card
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Select Variables to Correlate")
-                            .font(.headline)
+                        HStack {
+                            Text("Select Variables to Correlate")
+                                .font(.headline)
+                            Spacer()
+                            // Swap X & Y Button
+                            Button(action: swapAxes) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.up.arrow.down")
+                                    Text("Swap X & Y")
+                                }
+                                .font(.caption.bold())
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(8)
+                            }
+                        }
 
-                        // Metric 1 (X Axis)
-                        VStack(alignment: .leading, spacing: 4) {
+                        // X-AXIS Block
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("X-AXIS (INDEPENDENT)")
                                 .font(.caption2.bold())
                                 .foregroundColor(.secondary)
 
-                            HStack {
-                                Picker("Metric 1", selection: $metricId1) {
-                                    ForEach(HealthCatalog.allMetrics) { m in
-                                        Text(m.displayName).tag(m.id)
+                            VStack(spacing: 6) {
+                                // Metric Selector Button
+                                Menu {
+                                    Picker("Metric 1", selection: $metricId1) {
+                                        ForEach(availableMetrics) { m in
+                                            Text(m.displayName).tag(m.id)
+                                        }
                                     }
-                                }
-                                .pickerStyle(.menu)
-
-                                Spacer()
-
-                                Picker("Transform", selection: $transform1) {
-                                    ForEach(TransformType.allCases) { t in
-                                        Text(t.rawValue).tag(t)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: metric1.icon)
+                                            .foregroundColor(metric1.color)
+                                            .frame(width: 20)
+                                        Text(metric1.displayName)
+                                            .font(.subheadline.bold())
+                                            .foregroundColor(.primary)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Spacer()
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
                                     }
+                                    .padding(10)
+                                    .background(Color(.secondarySystemGroupedBackground))
+                                    .cornerRadius(8)
                                 }
-                                .pickerStyle(.menu)
+
+                                // Transform Selector Button
+                                Menu {
+                                    Picker("Transform 1", selection: $transform1) {
+                                        ForEach(TransformType.allCases) { t in
+                                            Text(t.rawValue).tag(t)
+                                        }
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text("Transform: ")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(transform1.rawValue)
+                                            .font(.caption.bold())
+                                            .foregroundColor(transform1.isDerivative ? .orange : (transform1.isLag ? .purple : .blue))
+                                        Spacer()
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(Color(.secondarySystemGroupedBackground).opacity(0.7))
+                                    .cornerRadius(8)
+                                }
                             }
                             .padding(8)
                             .background(Color(.tertiarySystemGroupedBackground))
-                            .cornerRadius(8)
+                            .cornerRadius(10)
                         }
 
-                        // Metric 2 (Y Axis)
-                        VStack(alignment: .leading, spacing: 4) {
+                        // Y-AXIS Block
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("Y-AXIS (DEPENDENT)")
                                 .font(.caption2.bold())
                                 .foregroundColor(.secondary)
 
-                            HStack {
-                                Picker("Metric 2", selection: $metricId2) {
-                                    ForEach(HealthCatalog.allMetrics) { m in
-                                        Text(m.displayName).tag(m.id)
+                            VStack(spacing: 6) {
+                                // Metric Selector Button
+                                Menu {
+                                    Picker("Metric 2", selection: $metricId2) {
+                                        ForEach(availableMetrics) { m in
+                                            Text(m.displayName).tag(m.id)
+                                        }
                                     }
-                                }
-                                .pickerStyle(.menu)
-
-                                Spacer()
-
-                                Picker("Transform", selection: $transform2) {
-                                    ForEach(TransformType.allCases) { t in
-                                        Text(t.rawValue).tag(t)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: metric2.icon)
+                                            .foregroundColor(metric2.color)
+                                            .frame(width: 20)
+                                        Text(metric2.displayName)
+                                            .font(.subheadline.bold())
+                                            .foregroundColor(.primary)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Spacer()
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
                                     }
+                                    .padding(10)
+                                    .background(Color(.secondarySystemGroupedBackground))
+                                    .cornerRadius(8)
                                 }
-                                .pickerStyle(.menu)
+
+                                // Transform Selector Button
+                                Menu {
+                                    Picker("Transform 2", selection: $transform2) {
+                                        ForEach(TransformType.allCases) { t in
+                                            Text(t.rawValue).tag(t)
+                                        }
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text("Transform: ")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(transform2.rawValue)
+                                            .font(.caption.bold())
+                                            .foregroundColor(transform2.isDerivative ? .orange : (transform2.isLag ? .purple : .blue))
+                                        Spacer()
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(Color(.secondarySystemGroupedBackground).opacity(0.7))
+                                    .cornerRadius(8)
+                                }
                             }
                             .padding(8)
                             .background(Color(.tertiarySystemGroupedBackground))
-                            .cornerRadius(8)
+                            .cornerRadius(10)
                         }
 
                         Button(action: computeCorrelation) {
@@ -243,7 +355,7 @@ struct CorrelationView: View {
                                 .foregroundColor(.orange)
                             Text("Insufficient Overlapping Data")
                                 .font(.headline)
-                            Text("Both metrics require at least 5 shared calendar days of records.")
+                            Text("Both metrics require at least 4 shared calendar days of records.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -266,16 +378,39 @@ struct CorrelationView: View {
         }
     }
 
+    func swapAxes() {
+        let tempMetric = metricId1
+        let tempTransform = transform1
+        metricId1 = metricId2
+        transform1 = transform2
+        metricId2 = tempMetric
+        transform2 = tempTransform
+        computeCorrelation()
+    }
+
+    func getDailySeries(for metricId: String) -> [Date: Double]? {
+        if let raw = healthManager.dailySeries[metricId] {
+            return raw
+        }
+        if let spec = LinearCombinationsCatalog.specs.first(where: { $0.id == metricId }) {
+            return LinearCombinationsCatalog.computeSeries(spec: spec, dailySeries: healthManager.dailySeries)
+        }
+        return nil
+    }
+
     func computeCorrelation() {
-        guard let raw1 = healthManager.dailySeries[metric1.id],
-              let raw2 = healthManager.dailySeries[metric2.id] else {
+        guard let raw1 = getDailySeries(for: metricId1),
+              let raw2 = getDailySeries(for: metricId2) else {
             correlationResult = nil
             pairedPoints = []
             return
         }
 
-        let s1 = TimeSeriesTransforms.transform(dailySeries: raw1, type: transform1)
-        let s2 = TimeSeriesTransforms.transform(dailySeries: raw2, type: transform2)
+        let isDiscrete1 = (metric1.aggregation == .averageDiscrete || metric1.category == .body)
+        let isDiscrete2 = (metric2.aggregation == .averageDiscrete || metric2.category == .body)
+
+        let s1 = TimeSeriesTransforms.transform(dailySeries: raw1, type: transform1, interpolateGaps: isDiscrete1)
+        let s2 = TimeSeriesTransforms.transform(dailySeries: raw2, type: transform2, interpolateGaps: isDiscrete2)
 
         if let result = TimeSeriesTransforms.pearsonCorrelation(seriesA: s1, seriesB: s2) {
             correlationResult = result.r

@@ -55,6 +55,148 @@ struct FeatureIdentifier: Hashable, Identifiable, Codable {
     }
 }
 
+// MARK: - Predefined Linear Combination Specifications
+struct LinearCombinationSpec: Identifiable, Hashable, Codable {
+    let id: String
+    let displayName: String
+    let constituentMetricIds: [String]
+    let operation: LinearOperation
+    let unitLabel: String
+    let icon: String
+    let physiologicalDescription: String
+
+    enum LinearOperation: String, Codable {
+        case netCaloricBalance // Dietary - (Active + Basal)
+        case caloricDeficit    // (Active + Basal) - Dietary
+        case hrReserveDelta    // Walking HR - Resting HR
+        case netCarbs          // Carbs - Fiber
+    }
+}
+
+struct LinearCombinationsCatalog {
+    static let specs: [LinearCombinationSpec] = [
+        LinearCombinationSpec(
+            id: "netCaloricBalance",
+            displayName: "Net Caloric Balance [Diet - (Active + Basal)]",
+            constituentMetricIds: ["dietaryEnergy", "activeEnergy", "basalEnergy"],
+            operation: .netCaloricBalance,
+            unitLabel: "kcal",
+            icon: "fork.knife.circle.fill",
+            physiologicalDescription: "Dietary intake minus Total Daily Energy Expenditure (Active + Basal Energy). Positive values indicate a true caloric surplus; negative values indicate a net deficit."
+        ),
+        LinearCombinationSpec(
+            id: "caloricDeficit",
+            displayName: "Calorie Deficit [(Active + Basal) - Diet]",
+            constituentMetricIds: ["activeEnergy", "basalEnergy", "dietaryEnergy"],
+            operation: .caloricDeficit,
+            unitLabel: "kcal",
+            icon: "flame.circle.fill",
+            physiologicalDescription: "Total Daily Energy Expenditure (Active + Basal Energy) minus dietary intake. Positive values reflect net daily caloric deficit."
+        ),
+        LinearCombinationSpec(
+            id: "heartRateReserveDelta",
+            displayName: "Heart Rate Exertion Delta (Walking - Resting HR)",
+            constituentMetricIds: ["walkingHeartRate", "restingHeartRate"],
+            operation: .hrReserveDelta,
+            unitLabel: "bpm",
+            icon: "heart.and.waveform.fill",
+            physiologicalDescription: "Difference between active walking heart rate and baseline resting heart rate. Captures daily cardiovascular exertion and autonomic stress."
+        ),
+        LinearCombinationSpec(
+            id: "netCarbs",
+            displayName: "Net Carbohydrates (Carbs - Fiber)",
+            constituentMetricIds: ["carbohydrates", "fiber"],
+            operation: .netCarbs,
+            unitLabel: "g",
+            icon: "leaf.circle.fill",
+            physiologicalDescription: "Total carbohydrates minus indigestible dietary fiber."
+        )
+    ]
+
+    /// Dynamically computes daily paired series for a linear combination spec
+    static func computeSeries(spec: LinearCombinationSpec, dailySeries: [String: [Date: Double]]) -> [Date: Double]? {
+        let calendar = Calendar.current
+
+        switch spec.operation {
+        case .netCaloricBalance, .caloricDeficit:
+            // Needs dietaryEnergy and activeEnergy; basalEnergy is included if available or estimated from body mass / typical BMR
+            guard let diet = dailySeries["dietaryEnergy"], !diet.isEmpty,
+                  let active = dailySeries["activeEnergy"], !active.isEmpty else {
+                return nil
+            }
+
+            let basal = dailySeries["basalEnergy"] ?? [:]
+            let bodyMass = dailySeries["bodyMass"] ?? [:]
+
+            // Average observed BMR or estimate ~1600 kcal default if Apple Watch basal burn is missing
+            let fallbackBMR: Double
+            if !basal.isEmpty {
+                fallbackBMR = basal.values.reduce(0, +) / Double(basal.count)
+            } else if let latestMass = bodyMass.values.first {
+                // Katch-McArdle / Mifflin approximation: ~ 10 kcal / lb of body mass
+                fallbackBMR = latestMass * 10.0
+            } else {
+                fallbackBMR = 1650.0
+            }
+
+            let commonDates = Set(diet.keys.map { calendar.startOfDay(for: $0) })
+                .intersection(Set(active.keys.map { calendar.startOfDay(for: $0) }))
+
+            guard commonDates.count >= 3 else { return nil }
+
+            var result: [Date: Double] = [:]
+            for date in commonDates {
+                guard let dVal = diet[date], let aVal = active[date],
+                      dVal.isFinite, aVal.isFinite else { continue }
+
+                let bVal = basal[date] ?? fallbackBMR
+                let tdee = aVal + bVal
+
+                if spec.operation == .netCaloricBalance {
+                    // Diet - (Active + Basal)
+                    result[date] = dVal - tdee
+                } else {
+                    // (Active + Basal) - Diet
+                    result[date] = tdee - dVal
+                }
+            }
+
+            return result.isEmpty ? nil : result
+
+        case .hrReserveDelta:
+            guard let walking = dailySeries["walkingHeartRate"],
+                  let resting = dailySeries["restingHeartRate"],
+                  !walking.isEmpty, !resting.isEmpty else {
+                return nil
+            }
+
+            let commonDates = Set(walking.keys.map { calendar.startOfDay(for: $0) })
+                .intersection(Set(resting.keys.map { calendar.startOfDay(for: $0) }))
+
+            guard commonDates.count >= 3 else { return nil }
+            var result: [Date: Double] = [:]
+            for date in commonDates {
+                if let w = walking[date], let r = resting[date], w.isFinite, r.isFinite {
+                    result[date] = w - r
+                }
+            }
+            return result.isEmpty ? nil : result
+
+        case .netCarbs:
+            guard let carbs = dailySeries["carbohydrates"], !carbs.isEmpty else { return nil }
+            let fiber = dailySeries["fiber"] ?? [:]
+            var result: [Date: Double] = [:]
+
+            for (date, cVal) in carbs {
+                let norm = calendar.startOfDay(for: date)
+                let fVal = fiber[norm] ?? 0.0
+                result[norm] = max(0.0, cVal - fVal)
+            }
+            return result.isEmpty ? nil : result
+        }
+    }
+}
+
 // MARK: - Mathematical Transformations & Linear Interpolation
 struct TimeSeriesTransforms {
     
@@ -201,7 +343,6 @@ struct TimeSeriesTransforms {
         let varX = (n * sumX2) - (sumX * sumX)
         let varY = (n * sumY2) - (sumY * sumY)
         
-        // Realistic numerical variance guard (avoid dividing by zero, but do not drop gradual linear changes)
         guard varX > 1e-12, varY > 1e-12 else { return nil }
         
         let den = sqrt(varX * varY)

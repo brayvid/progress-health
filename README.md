@@ -45,8 +45,8 @@ correlate-health/
 ### Example Screenshots
 
 <p float="left">
-<img src="example1.png" style="width:48%">
-<img src="example2.png" style="width:48%">
+<img src="example01.png" style="width:48%">
+<img src="example02.png" style="width:48%">
 </p>
 
 ---
