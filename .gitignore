@@ -1,4 +1,54 @@
+# ==========================================
+# macOS System Files
+# ==========================================
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon\r\r
+._*
+.Spotlight-V100
+.Trashes
 
-*.xcuserstate
+# ==========================================
+# Xcode User Data & Cache
+# ==========================================
+# User-specific layout, cursor positions, and breakpoints
 xcuserdata/
+*.xcuserdatad
+*.xcuserstate
+*.xcbkptlist
+
+# Local build artifacts and caches
+build/
+DerivedData/
+*.moved-aside
+
+# ==========================================
+# App Packaging & Archives
+# ==========================================
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ==========================================
+# Swift Package Manager (SPM)
+# ==========================================
+.build/
+.swiftpm/configuration/
+.swiftpm/xcode/
+
+# ==========================================
+# Credentials & Security (Safety Guardrails)
+# ==========================================
+# Never commit private keys or certificates
+*.p12
+*.p8
+*.mobileprovision
+*.cer
+*.certSigningRequest
+*.keystore
+
+# Local environment/secret files (if any in the future)
+.env
+.env.*
+secrets.json
