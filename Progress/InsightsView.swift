@@ -1,12 +1,13 @@
 //
 //  InsightsView.swift
-//  Correlate
+//  Progress
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
 
 import SwiftUI
 import Charts
+import HealthKit
 
 // MARK: - Codable Point for Persistence
 struct InsightDataPoint: Codable, Identifiable {
@@ -26,7 +27,6 @@ struct DiscoveredInsight: Identifiable, Codable {
     let sampleSize: Int
     let dataPoints: [InsightDataPoint]
 
-    // Transient catalog properties restored dynamically
     var metricA: HealthMetricType {
         if let catalogMetric = HealthCatalog.allMetrics.first(where: { $0.id == metricIdA }) {
             return catalogMetric
@@ -177,7 +177,7 @@ struct InsightsPersistence {
     }
 }
 
-// MARK: - Filter for Trivial / Co-linear / Redundant Relationships
+// MARK: - Filter for Trivial / Co-linear Relationships
 struct InsightFilters {
     private static let trivialPairs: Set<Set<String>> = [
         ["steps", "distanceWalkingRunning"],
@@ -207,18 +207,11 @@ struct InsightFilters {
     ]
 
     static func isTrivial(metricA: String, metricB: String, transformA: TransformType, transformB: TransformType) -> Bool {
-        if metricA == metricB {
-            return true
-        }
-
-        if transformA.isLag && transformB.isLag {
-            return true
-        }
+        if metricA == metricB { return true }
+        if transformA.isLag && transformB.isLag { return true }
 
         let pair: Set<String> = [metricA, metricB]
-        if trivialPairs.contains(pair) {
-            return true
-        }
+        if trivialPairs.contains(pair) { return true }
 
         for spec in LinearCombinationsCatalog.specs {
             if (metricA == spec.id && spec.constituentMetricIds.contains(metricB)) ||
@@ -236,33 +229,23 @@ enum InsightSortOption: String, CaseIterable, Identifiable {
     case correlationStrength = "Correlation Strength"
     case xAxis = "X-Axis Metric"
     case yAxis = "Y-Axis Metric"
-    
     var id: String { rawValue }
 }
 
 enum SortDirection: String, CaseIterable, Identifiable {
     case highToLow = "High → Low"
     case lowToHigh = "Low → High"
-    
     var id: String { rawValue }
-    
-    var icon: String {
-        switch self {
-        case .highToLow: return "arrow.down"
-        case .lowToHigh: return "arrow.up"
-        }
-    }
+    var icon: String { self == .highToLow ? "arrow.down" : "arrow.up" }
 }
 
 enum PolarityFilter: String, CaseIterable, Identifiable {
     case all = "All (+/-)"
     case positiveOnly = "Positive (+)"
     case negativeOnly = "Inverse (-)"
-    
     var id: String { rawValue }
 }
 
-// Explicit Target Feature Specifier
 struct TargetFeatureSelection: Equatable {
     let metric: HealthMetricType
     let transform: TransformType?
@@ -283,16 +266,13 @@ struct InsightsView: View {
     @State private var isAnalyzing: Bool = false
     @State private var selectedInsightForDetail: DiscoveredInsight? = nil
 
-    // Search & Specific Target Selection States
     @State private var searchText: String = ""
     @State private var selectedTargetFeature: TargetFeatureSelection? = nil
 
-    // Sorting & Polarity States
     @State private var sortOption: InsightSortOption = .correlationStrength
     @State private var sortDirection: SortDirection = .highToLow
     @State private var polarityFilter: PolarityFilter = .all
 
-    // THREE INDEPENDENT TOGGLES: Default all true
     @State private var includeRaw: Bool = true
     @State private var includeRateOfChange: Bool = true
     @State private var includeLags: Bool = true
@@ -301,8 +281,22 @@ struct InsightsView: View {
         .raw,
         .delta1Day,
         .delta7Day,
+        .delta14Day,
+        .delta21Day,
         .lag1Day,
         .lag2Day
+    ]
+
+    private let defaultSuggestionIds: [String] = [
+        "bodyMass",
+        "caloricDeficit",
+        "netCaloricBalance",
+        "sleepDuration",
+        "restingHeartRate",
+        "hrv",
+        "steps",
+        "activeEnergy",
+        "dietaryEnergy"
     ]
 
     var allAvailableMetrics: [HealthMetricType] {
@@ -329,7 +323,12 @@ struct InsightsView: View {
 
     var metricSuggestions: [HealthMetricType] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return [] }
+        if query.isEmpty {
+            let defaults = defaultSuggestionIds.compactMap { id in
+                allAvailableMetrics.first { $0.id == id }
+            }
+            return defaults.isEmpty ? Array(allAvailableMetrics.prefix(8)) : defaults
+        }
         return allAvailableMetrics.filter {
             $0.displayName.lowercased().contains(query) ||
             $0.id.lowercased().contains(query) ||
@@ -338,7 +337,6 @@ struct InsightsView: View {
     }
 
     var processedInsights: [DiscoveredInsight] {
-        // 1. Target Feature / Query Filtering
         let baseList: [DiscoveredInsight]
         if let target = selectedTargetFeature {
             baseList = discoveredInsights.filter { insight in
@@ -366,9 +364,7 @@ struct InsightsView: View {
             baseList = discoveredInsights
         }
 
-        // 2. Three Independent Toggles & Polarity Filtering
         var filtered = baseList.filter { insight in
-            // A. Polarity Filter
             switch polarityFilter {
             case .all: break
             case .positiveOnly:
@@ -377,7 +373,6 @@ struct InsightsView: View {
                 guard insight.r < 0 else { return false }
             }
 
-            // B. When an explicit target feature is pinned:
             if let target = selectedTargetFeature {
                 let isTargetA: Bool
                 if let specificTransform = target.transform {
@@ -388,19 +383,12 @@ struct InsightsView: View {
                 
                 let partnerTransform = isTargetA ? insight.featureB.transform : insight.featureA.transform
 
-                if !includeRaw && partnerTransform == .raw {
-                    return false
-                }
-                if !includeRateOfChange && partnerTransform.isDerivative {
-                    return false
-                }
-                if !includeLags && partnerTransform.isLag {
-                    return false
-                }
+                if !includeRaw && partnerTransform == .raw { return false }
+                if !includeRateOfChange && partnerTransform.isDerivative { return false }
+                if !includeLags && partnerTransform.isLag { return false }
                 return true
             }
 
-            // C. General view (no target pinned)
             func isTransformAllowed(_ t: TransformType) -> Bool {
                 if t == .raw && !includeRaw { return false }
                 if t.isDerivative && !includeRateOfChange { return false }
@@ -416,7 +404,6 @@ struct InsightsView: View {
             return true
         }
 
-        // 3. Sorting
         filtered.sort { a, b in
             let ascending = (sortDirection == .lowToHigh)
             switch sortOption {
@@ -441,7 +428,7 @@ struct InsightsView: View {
                     VStack(spacing: 16) {
                         ProgressView()
                             .scaleEffect(1.3)
-                        Text("Cross-Correlating Diet, Activity, Vitals & Combinations...")
+                        Text("Cross-Analyzing Diet, Activity, Multi-Day Deltas & Combinations...")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     }
@@ -452,7 +439,7 @@ struct InsightsView: View {
                             .foregroundColor(.yellow)
                         Text("No Connections Surfaced")
                             .font(.headline)
-                        Text("Tap Scan below to run an exhaustive correlation search across raw dietary intake, calorie deficits, rates of change, and vitals.")
+                        Text("Tap Scan below to run an automated search across raw data, calorie deficits, 7/14/21-day rates of change, and vitals.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -471,7 +458,6 @@ struct InsightsView: View {
                     .padding()
                 } else {
                     VStack(spacing: 0) {
-                        // Explicit Target Filter Banner
                         if let selected = selectedTargetFeature {
                             HStack {
                                 Image(systemName: selected.metric.icon)
@@ -504,7 +490,6 @@ struct InsightsView: View {
 
                         // Header Controls Bar
                         VStack(spacing: 8) {
-                            // Row 1: Sort by, Hi/Lo, and Polarity (+ / -)
                             HStack(spacing: 8) {
                                 Menu {
                                     Picker("Sort By", selection: $sortOption) {
@@ -561,7 +546,7 @@ struct InsightsView: View {
                             .padding(.horizontal)
                             .padding(.top, 8)
 
-                            // Row 2: THREE INDEPENDENT TOGGLES (Raw, Rates of Change, Lagged)
+                            // Three Toggles: Raw, Rates of Change (Δ), Lagged
                             HStack(spacing: 8) {
                                 Button(action: { includeRaw.toggle() }) {
                                     HStack(spacing: 4) {
@@ -618,7 +603,7 @@ struct InsightsView: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("No matching insights found.")
                                             .font(.subheadline.bold())
-                                        Text("Try enabling the Raw, Rates of Change, or Lagged toggles, or clearing active search.")
+                                        Text("Try enabling the Raw, Rates of Change, or Lagged toggles, or clearing active filters.")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -728,11 +713,23 @@ struct InsightsView: View {
                 return data.count >= 2
             }
 
-            // 1. Process Raw HealthCatalog metrics
             for m in activeMetrics {
                 guard let baseDaily = healthManager.dailySeries[m.id], !baseDaily.isEmpty else { continue }
 
-                let shouldInterpolate = (m.aggregation == .averageDiscrete || m.category == .body)
+                // NEW:
+                let isDiscrete: Bool = {
+                    switch m.aggregation {
+                    case .averageDiscrete: return true
+                    default: return false
+                    }
+                }()
+                let isBody: Bool = {
+                    switch m.category {
+                    case .body: return true
+                    default: return false
+                    }
+                }()
+                let shouldInterpolate = isDiscrete || isBody
                 let workingRaw = shouldInterpolate ? TimeSeriesTransforms.linearlyInterpolated(dailySeries: baseDaily) : baseDaily
 
                 // Raw Series
@@ -742,58 +739,32 @@ struct InsightsView: View {
                     workingRaw
                 ))
 
-                // 1-Day Rate of Change
-                let delta1 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .delta1Day, interpolateGaps: shouldInterpolate)
-                if delta1.count >= 3 {
-                    candidateFeatures.append((
-                        FeatureIdentifier(metricId: m.id, transform: .delta1Day),
-                        m,
-                        delta1
-                    ))
-                }
-
-                // 7-Day Velocity
-                if m.id == "bodyMass" || m.category == .body || m.category == .nutrition || m.category == .activity || m.category == .vitals {
-                    let delta7 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .delta7Day, interpolateGaps: shouldInterpolate)
-                    if delta7.count >= 3 {
+                // Rates of Change: 1-Day, 7-Day, 14-Day, 21-Day
+                for deltaType in [TransformType.delta1Day, TransformType.delta7Day, TransformType.delta14Day, TransformType.delta21Day] {
+                    let deltaN = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: deltaType, interpolateGaps: shouldInterpolate)
+                    if deltaN.count >= 3 {
                         candidateFeatures.append((
-                            FeatureIdentifier(metricId: m.id, transform: .delta7Day),
+                            FeatureIdentifier(metricId: m.id, transform: deltaType),
                             m,
-                            delta7
+                            deltaN
                         ))
                     }
                 }
 
                 // Time Lags (t-1, t-2, t-7)
-                let lag1 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .lag1Day, interpolateGaps: shouldInterpolate)
-                if lag1.count >= 3 {
-                    candidateFeatures.append((
-                        FeatureIdentifier(metricId: m.id, transform: .lag1Day),
-                        m,
-                        lag1
-                    ))
-                }
-
-                let lag2 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .lag2Day, interpolateGaps: shouldInterpolate)
-                if lag2.count >= 3 {
-                    candidateFeatures.append((
-                        FeatureIdentifier(metricId: m.id, transform: .lag2Day),
-                        m,
-                        lag2
-                    ))
-                }
-
-                let lag7 = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: .lag7Day, interpolateGaps: shouldInterpolate)
-                if lag7.count >= 3 {
-                    candidateFeatures.append((
-                        FeatureIdentifier(metricId: m.id, transform: .lag7Day),
-                        m,
-                        lag7
-                    ))
+                for lagType in [TransformType.lag1Day, TransformType.lag2Day, TransformType.lag7Day] {
+                    let lagN = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: lagType, interpolateGaps: shouldInterpolate)
+                    if lagN.count >= 3 {
+                        candidateFeatures.append((
+                            FeatureIdentifier(metricId: m.id, transform: lagType),
+                            m,
+                            lagN
+                        ))
+                    }
                 }
             }
 
-            // 2. Synthesize Linear Combinations & Scaled Composites
+            // Synthesize Linear Combinations
             for spec in LinearCombinationsCatalog.specs {
                 if let comboDaily = LinearCombinationsCatalog.computeSeries(spec: spec, dailySeries: healthManager.dailySeries) {
                     let syntheticMetric = HealthMetricType(
@@ -810,33 +781,23 @@ struct InsightsView: View {
                         defaultLineChart: false
                     )
 
-                    // A. Raw Linear Combination
                     candidateFeatures.append((
                         FeatureIdentifier(metricId: spec.id, transform: .raw),
                         syntheticMetric,
                         comboDaily
                     ))
 
-                    // B. 1-Day & 7-Day Derivatives
-                    let delta1 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .delta1Day, interpolateGaps: false)
-                    if delta1.count >= 3 {
-                        candidateFeatures.append((
-                            FeatureIdentifier(metricId: spec.id, transform: .delta1Day),
-                            syntheticMetric,
-                            delta1
-                        ))
+                    for deltaType in [TransformType.delta1Day, TransformType.delta7Day, TransformType.delta14Day, TransformType.delta21Day] {
+                        let deltaN = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: deltaType, interpolateGaps: false)
+                        if deltaN.count >= 3 {
+                            candidateFeatures.append((
+                                FeatureIdentifier(metricId: spec.id, transform: deltaType),
+                                syntheticMetric,
+                                deltaN
+                            ))
+                        }
                     }
 
-                    let delta7 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .delta7Day, interpolateGaps: false)
-                    if delta7.count >= 3 {
-                        candidateFeatures.append((
-                            FeatureIdentifier(metricId: spec.id, transform: .delta7Day),
-                            syntheticMetric,
-                            delta7
-                        ))
-                    }
-
-                    // C. Lags (t-1, t-2)
                     let lag1 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .lag1Day, interpolateGaps: false)
                     if lag1.count >= 3 {
                         candidateFeatures.append((
@@ -848,7 +809,7 @@ struct InsightsView: View {
                 }
             }
 
-            // 3. Pairwise Cross-Correlation Matrix
+            // Cross-Correlation Matrix
             var results: [DiscoveredInsight] = []
             var seenPairs = Set<String>()
 
@@ -891,8 +852,6 @@ struct InsightsView: View {
             }
 
             results.sort { $0.absR > $1.absR }
-
-            // Persist discoveries to disk
             InsightsPersistence.save(insights: results)
 
             DispatchQueue.main.async {
@@ -984,7 +943,6 @@ struct InsightDetailModal: View {
     let insight: DiscoveredInsight
     @Environment(\.dismiss) var dismiss
 
-    // Local states
     @State private var isAxesFlipped: Bool = false
     @State private var selectedGranularity: Calendar.Component = .day
 
@@ -1020,7 +978,6 @@ struct InsightDetailModal: View {
         }
     }
 
-    // Dynamic points aggregated by selected time period
     var activePoints: [(date: Date, x: Double, y: Double)] {
         let basePoints = insight.points
         let orientedPoints: [(date: Date, x: Double, y: Double)]
@@ -1107,7 +1064,6 @@ struct InsightDetailModal: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    // Summary Card with Swap Button
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(isAxesFlipped ? "\(insight.titleB) vs \(insight.titleA)" : insight.title)
@@ -1147,7 +1103,6 @@ struct InsightDetailModal: View {
                     .background(Color(.secondarySystemGroupedBackground))
                     .cornerRadius(12)
 
-                    // Granularity Selector
                     VStack(alignment: .leading, spacing: 6) {
                         Text("SCATTER PLOT TIME AGGREGATION")
                             .font(.caption2.bold())
@@ -1162,7 +1117,6 @@ struct InsightDetailModal: View {
                     }
                     .padding(.horizontal)
 
-                    // Scatter Plot fitted directly to data domain
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Scatter & Linear Fit")
                             .font(.headline)
@@ -1233,7 +1187,6 @@ struct InsightDetailModal: View {
                         .cornerRadius(12)
                     }
 
-                    // Plain-English Explanation
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Physiological Interpretation")
                             .font(.headline)
@@ -1252,7 +1205,7 @@ struct InsightDetailModal: View {
                                 Text("⚖️ Weight Rate of Change (Δ):")
                                     .font(.subheadline.bold())
                                     .foregroundColor(.indigo)
-                                Text("Day-over-day weight changes (1–3 days) predominantly reflect fluid balance, glycogen replenishment, sodium consumption, and acute recovery. Multi-day velocities isolate true tissue accretion or loss from sustained caloric surplus or deficit.")
+                                Text("Multi-day velocities (7, 14, and 21 days) smooth out acute daily water, glycogen, and sodium fluctuations to capture true tissue accumulation or deficit.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

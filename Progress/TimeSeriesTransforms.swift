@@ -1,6 +1,6 @@
 //
 //  TimeSeriesTransforms.swift
-//  Correlate
+//  Progress-Health
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
@@ -12,31 +12,35 @@ enum TransformType: String, CaseIterable, Identifiable, Codable {
     case raw = "Raw Series"
     case delta1Day = "1-Day Δ (Rate of Change)"
     case delta7Day = "7-Day Δ (Rate of Change)"
+    case delta14Day = "14-Day Δ (Rate of Change)"
+    case delta21Day = "21-Day Δ (Rate of Change)"
     case lag1Day = "Lag: 1 Day Ago (t-1)"
     case lag2Day = "Lag: 2 Days Ago (t-2)"
     case lag3Day = "Lag: 3 Days Ago (t-3)"
     case lag7Day = "Lag: 7 Days Ago (t-7)"
-    
+
     var id: String { rawValue }
-    
+
     var shortSuffix: String {
         switch self {
         case .raw: return ""
         case .delta1Day: return " [Δ1d]"
         case .delta7Day: return " [Δ7d]"
+        case .delta14Day: return " [Δ14d]"
+        case .delta21Day: return " [Δ21d]"
         case .lag1Day: return " [t-1d]"
         case .lag2Day: return " [t-2d]"
         case .lag3Day: return " [t-3d]"
         case .lag7Day: return " [t-7d]"
         }
     }
-    
+
     var isLag: Bool {
         return self == .lag1Day || self == .lag2Day || self == .lag3Day || self == .lag7Day
     }
-    
+
     var isDerivative: Bool {
-        return self == .delta1Day || self == .delta7Day
+        return self == .delta1Day || self == .delta7Day || self == .delta14Day || self == .delta21Day
     }
 }
 
@@ -44,11 +48,11 @@ enum TransformType: String, CaseIterable, Identifiable, Codable {
 struct FeatureIdentifier: Hashable, Identifiable, Codable {
     let metricId: String
     let transform: TransformType
-    
+
     var id: String {
         "\(metricId)_\(transform.rawValue)"
     }
-    
+
     func name(with catalogMetric: HealthMetricType?) -> String {
         let base = catalogMetric?.displayName ?? metricId
         return "\(base)\(transform.shortSuffix)"
@@ -303,7 +307,7 @@ struct LinearCombinationsCatalog {
 
 // MARK: - Mathematical Transformations, Interpolation & Temporal Aggregation
 struct TimeSeriesTransforms {
-    
+
     static func aggregate(series: [Date: Double], by component: Calendar.Component) -> [Date: Double] {
         guard component != .day, !series.isEmpty else { return series }
         let calendar = Calendar.current
@@ -353,11 +357,11 @@ struct TimeSeriesTransforms {
 
         return interpolated
     }
-    
+
     static func transform(dailySeries: [Date: Double], type: TransformType, interpolateGaps: Bool = true) -> [Date: Double] {
         guard !dailySeries.isEmpty else { return [:] }
         let calendar = Calendar.current
-        
+
         let workingSeries: [Date: Double]
         if interpolateGaps && (type.isDerivative || dailySeries.count < 45) {
             workingSeries = linearlyInterpolated(dailySeries: dailySeries, maxGapDays: 21)
@@ -388,13 +392,18 @@ struct TimeSeriesTransforms {
                 }
             }
 
-        case .delta7Day:
-            for i in 0..<sortedDates.count {
-                let currentDate = sortedDates[i]
-                if let date7dAgo = calendar.date(byAdding: .day, value: -7, to: currentDate),
-                   let v7dAgo = workingSeries[date7dAgo],
+        case .delta7Day, .delta14Day, .delta21Day:
+            let offsetDays: Int
+            switch type {
+            case .delta7Day: offsetDays = 7
+            case .delta14Day: offsetDays = 14
+            default: offsetDays = 21
+            }
+            for currentDate in sortedDates {
+                if let dateNDaysAgo = calendar.date(byAdding: .day, value: -offsetDays, to: currentDate),
+                   let vNDaysAgo = workingSeries[dateNDaysAgo],
                    let vCurrent = workingSeries[currentDate] {
-                    transformed[currentDate] = vCurrent - v7dAgo
+                    transformed[currentDate] = vCurrent - vNDaysAgo
                 }
             }
 
@@ -436,47 +445,47 @@ struct TimeSeriesTransforms {
         granularity: Calendar.Component = .day
     ) -> (r: Double, points: [(date: Date, x: Double, y: Double)], n: Int)? {
         let calendar = Calendar.current
-        
+
         let aggA = aggregate(series: seriesA, by: granularity)
         let aggB = aggregate(series: seriesB, by: granularity)
 
         let cleanA = Dictionary(uniqueKeysWithValues: aggA.map { (calendar.startOfDay(for: $0.key), $0.value) })
         let cleanB = Dictionary(uniqueKeysWithValues: aggB.map { (calendar.startOfDay(for: $0.key), $0.value) })
-        
+
         let commonDates = Set(cleanA.keys).intersection(cleanB.keys)
         let minRequired = granularity == .month ? 3 : (granularity == .weekOfYear ? 4 : 4)
         guard commonDates.count >= minRequired else { return nil }
-        
+
         let pairs: [(date: Date, x: Double, y: Double)] = commonDates.compactMap { d in
             guard let valA = cleanA[d], let valB = cleanB[d],
                   valA.isFinite, valB.isFinite else { return nil }
             return (date: d, x: valA, y: valB)
         }.sorted { $0.date < $1.date }
-        
+
         let n = Double(pairs.count)
         guard n >= Double(minRequired) else { return nil }
-        
+
         let x = pairs.map(\.x)
         let y = pairs.map(\.y)
-        
+
         let sumX = x.reduce(0, +)
         let sumY = y.reduce(0, +)
         let sumXY = zip(x, y).map(*).reduce(0, +)
         let sumX2 = x.map { $0 * $0 }.reduce(0, +)
         let sumY2 = y.map { $0 * $0 }.reduce(0, +)
-        
+
         let num = (n * sumXY) - (sumX * sumY)
         let varX = (n * sumX2) - (sumX * sumX)
         let varY = (n * sumY2) - (sumY * sumY)
-        
+
         guard varX > 1e-12, varY > 1e-12 else { return nil }
-        
+
         let den = sqrt(varX * varY)
         guard den > 0 else { return nil }
-        
+
         let r = num / den
         guard r.isFinite else { return nil }
-        
+
         return (r: max(-1.0, min(1.0, r)), points: pairs, n: pairs.count)
     }
 }

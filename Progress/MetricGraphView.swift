@@ -1,6 +1,6 @@
 //
 //  MetricGraphView.swift
-//  Correlate
+//  Progress
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
@@ -16,6 +16,7 @@ struct MetricGraphView: View {
     @State private var selectedGranularity: Calendar.Component = .day
     @State private var selectedChartStyle: ChartStyle = .standard
     @State private var selectedTransform: TransformType = .raw
+    @State private var showingComparePicker: Bool = false
 
     enum ChartStyle: String, CaseIterable, Identifiable {
         case standard = "Auto"
@@ -56,6 +57,15 @@ struct MetricGraphView: View {
         }
 
         return aggregated.sorted { $0.date < $1.date }
+    }
+
+    // Always computes the true daily average across recorded days
+    var dailyAverage: Double? {
+        guard let baseDaily = healthManager.dailySeries[metric.id], !baseDaily.isEmpty else { return nil }
+        let transformedDaily = TimeSeriesTransforms.transform(dailySeries: baseDaily, type: selectedTransform)
+        let vals = Array(transformedDaily.values)
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
     }
 
     var stats: (avg: Double, min: Double, max: Double, total: Double, latest: Double)? {
@@ -126,18 +136,18 @@ struct MetricGraphView: View {
                 }
                 .padding(.horizontal)
 
-                // Stats Dashboard Bar
-                if let s = stats {
-                    HStack(spacing: 12) {
+                // Stats Dashboard Bar (Average is ALWAYS daily)
+                if let s = stats, let dAvg = dailyAverage {
+                    HStack(spacing: 8) {
                         StatCard(title: "Latest", value: String(format: "%.1f", s.latest), unit: metric.unitLabel)
-                        StatCard(title: "Average", value: String(format: "%.1f", s.avg), unit: metric.unitLabel)
+                        StatCard(title: "Daily Avg", value: String(format: "%.1f", dAvg), unit: "\(metric.unitLabel)/d")
                         StatCard(title: "Min", value: String(format: "%.1f", s.min), unit: metric.unitLabel)
                         StatCard(title: "Max", value: String(format: "%.1f", s.max), unit: metric.unitLabel)
                     }
                     .padding(.horizontal)
                 }
 
-                // Main Uniform Chart View
+                // Main Chart View
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Image(systemName: metric.icon)
@@ -211,13 +221,14 @@ struct MetricGraphView: View {
                                 .cornerRadius(3)
                             }
 
-                            if let s = stats {
+                            // Average rule line: aligned to graph scale, with annotation reporting the daily figure
+                            if let s = stats, let dAvg = dailyAverage {
                                 RuleMark(y: .value("Average", s.avg))
                                     .foregroundStyle(Color.secondary.opacity(0.7))
                                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                                     .annotation(position: .top, alignment: .trailing) {
-                                        Text("Avg: \(String(format: "%.1f", s.avg)) \(metric.unitLabel)")
-                                            .font(.caption2)
+                                        Text("Avg: \(String(format: "%.1f", dAvg)) \(metric.unitLabel)/day")
+                                            .font(.caption2.bold())
                                             .foregroundColor(.secondary)
                                             .padding(2)
                                     }
@@ -262,7 +273,7 @@ struct MetricGraphView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("About \(metric.displayName)")
                         .font(.headline)
-                    Text("Category: \(metric.category.rawValue) • Aggregated by \(metric.aggregation == .cumulativeSum ? "Daily Total" : "Daily Average"). Derivatives (Δ) show day-over-day changes to detect trends.")
+                    Text("Category: \(metric.category.rawValue) • Aggregated by \(metric.aggregation == .cumulativeSum ? "Daily Total" : "Daily Average"). Multi-day rates of change (Δ7d, Δ14d, Δ21d) filter day-to-day noise to reveal true physiological trajectories.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
@@ -277,6 +288,34 @@ struct MetricGraphView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(metric.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showingComparePicker = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chart.xyaxis.line")
+                        Text("Compare")
+                    }
+                    .font(.subheadline.bold())
+                }
+            }
+        }
+        .sheet(isPresented: $showingComparePicker) {
+            CompareMetricPickerSheet(
+                primaryMetric: metric,
+                primaryTransform: selectedTransform
+            ) { otherMetricId, otherTransform in
+                healthManager.pendingRegressionSelection = RegressionSelection(
+                    metric1Id: metric.id,
+                    transform1: selectedTransform,
+                    metric2Id: otherMetricId,
+                    transform2: otherTransform
+                )
+                showingComparePicker = false
+                healthManager.selectedTab = 2
+            }
+        }
     }
 
     private var yDomain: ClosedRange<Double> {
@@ -303,17 +342,108 @@ struct MetricGraphView: View {
     }
 
     private func dateChartFormat(for component: Calendar.Component) -> Date.FormatStyle {
-            switch component {
-            case .day:
-                return .dateTime.month(.defaultDigits).day(.defaultDigits)
-            case .weekOfYear:
-                return .dateTime.month(.abbreviated).day(.defaultDigits)
-            case .month:
-                return .dateTime.month(.abbreviated)
-            default:
-                return .dateTime.month(.defaultDigits).day(.defaultDigits)
+        switch component {
+        case .day:
+            return .dateTime.month(.defaultDigits).day(.defaultDigits)
+        case .weekOfYear:
+            return .dateTime.month(.abbreviated).day(.defaultDigits)
+        case .month:
+            return .dateTime.month(.abbreviated)
+        default:
+            return .dateTime.month(.defaultDigits).day(.defaultDigits)
+        }
+    }
+}
+
+// MARK: - Picker Sheet to Jump to Regression
+struct CompareMetricPickerSheet: View {
+    let primaryMetric: HealthMetricType
+    let primaryTransform: TransformType
+    let onSelect: (String, TransformType) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText: String = ""
+    @State private var selectedOtherTransform: TransformType = .raw
+
+    private var candidateMetrics: [HealthMetricType] {
+        var list = HealthCatalog.allMetrics.filter { $0.id != primaryMetric.id }
+        for spec in LinearCombinationsCatalog.specs {
+            list.append(
+                HealthMetricType(
+                    id: spec.id,
+                    displayName: spec.displayName,
+                    category: .activity,
+                    quantityIdentifier: nil,
+                    categoryIdentifier: nil,
+                    defaultUnit: .count(),
+                    unitLabel: spec.unitLabel,
+                    aggregation: .cumulativeSum,
+                    icon: spec.icon,
+                    color: .orange,
+                    defaultLineChart: false
+                )
+            )
+        }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return list }
+        return list.filter {
+            $0.displayName.lowercased().contains(q) ||
+            $0.category.rawValue.lowercased().contains(q)
+        }
+    }
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Compare with transform:")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Picker("Transform", selection: $selectedOtherTransform) {
+                        ForEach(TransformType.allCases) { t in
+                            Text(t.rawValue).tag(t)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemGroupedBackground))
+
+                List(candidateMetrics) { other in
+                    Button {
+                        onSelect(other.id, selectedOtherTransform)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: other.icon)
+                                .foregroundColor(other.color)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(other.displayName)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                Text(other.category.rawValue)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.right.circle.fill")
+                                .foregroundColor(.blue)
+                        }
+                    }
+                }
+                .searchable(text: $searchText, prompt: "Search metric to compare with \(primaryMetric.displayName)")
+            }
+            .navigationTitle("Compare in Regression")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
             }
         }
+    }
 }
 
 struct StatCard: View {

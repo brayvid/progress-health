@@ -1,43 +1,45 @@
-# Correlate: Apple Health Insights
+# Progress: Apple Health Insights
 
-Correlate is an iOS app that uncovers hidden connections in your Apple Health data. It tracks 25+ metrics, computes daily rates of change and time lags, and automatically surfaces statistically significant correlations between your habits and biological markers.
+Progress is an iOS app that uncovers hidden connections in your Apple Health data. It tracks 25+ metrics, computes daily rates of change and time lags, and automatically surfaces statistically significant correlations between your habits and biological markers.
 
 ---
 
 ### Key Features
 
-* **25+ HealthKit Metrics:** physical activity, nutrition, vitals and body measurements.
-* **Smart Time-Series Engine:** Computes rates of change (e.g. 7-day velocity) and time lags (e.g. yesterday's sleep vs. today's resting heart rate) with linear interpolation between sparse records.
-* **Automated Insights:** Scans all feature combinations to rank meaningful correlations, automatically filtering out obvious pairs (like Steps vs. Distance).
-* **Interactive Exploration:**
-  * **Search & Filter:** Find connections by metric, polarity (+/-), or feature type (Raw, Rate of Change, Lagged).
-  * **Swift Charts:** Responsive trends and scatter plots with best-fit linear regression lines fit to your data.
-  * **Custom Correlation Tool:** Compare any two metrics or transformed features on demand.
-* **Local & Private:** Runs entirely on-device and caches discoveries locally.
+* **25+ HealthKit Metrics:** Physical activity, nutrition, vitals, body measurements, sleep, and mindfulness.
+* **Smart Time-Series Engine:** Computes multi-day rates of change (1-day, 7-day, 14-day, and 21-day velocity) and time lags (e.g. yesterday's sleep vs. today's resting heart rate) with linear interpolation between sparse records.
+* **Automated Insights Engine:** 
+  * Scans feature combinations to surface and rank meaningful correlations while automatically filtering out trivial or collinear pairs (like Steps vs. Distance).
+  * Instant search suggestions for common targets (Body Mass, Caloric Deficit, Sleep, HRV, Steps, Resting HR).
+* **Interactive Exploration & Regression:**
+  * **Unified Dashboard:** Clean metric trends with adaptive line, bar, and area charts. Average reference lines on weekly/monthly summaries consistently report daily figures.
+  * **One-Tap Metric Comparison:** Jump directly from any metric dashboard into a full regression analysis with a chosen partner series.
+  * **Custom Regression Tool:** Compare any two metrics or transformed features on demand with scatter plots, linear regression best-fit lines, and dynamic axis scaling.
+  * **Search & Filter:** Filter discoveries by metric, polarity (+/-), or feature type (Raw, Rates of Change, Lagged).
+* **Local & Private:** Runs entirely on-device with zero server uploads and caches discoveries locally.
 
 ---
 
 ### Tech Stack
 
-* **Platform:** iOS 16+ (Swift 5)
-* **Frameworks:** SwiftUI, Swift Charts, HealthKit, Foundation
+* **Platform:** iOS 16+ (Swift 5 / Swift 6)
+* **Frameworks:** SwiftUI, Swift Charts, HealthKit, Combine, Foundation
 
 ---
 
 ### Directory Structure
 
 ```plaintext
-correlate-health/
-├── CorrelateApp.swift            # App entry point & TabView navigation
-├── HealthManager.swift           # HealthKit authorization & 25+ metric catalog
-├── TimeSeriesTransforms.swift     # Interpolation, derivatives (Δ), and time lags (t-k)
+Progress/
+├── ProgressApp.swift             # App entry point & TabView navigation
+├── HealthManager.swift           # HealthKit authorization, 25+ catalog & cross-tab state
+├── TimeSeriesTransforms.swift     # Interpolation, derivatives (1/7/14/21d Δ), & time lags (t-k)
 ├── ContentView.swift             # Main health metric dashboard
-├── MetricGraphView.swift         # Dynamic trend charts & statistics
-├── CorrelationView.swift         # Custom bivariate correlation tool
-├── InsightsView.swift            # Automated correlation discovery engine
+├── MetricGraphView.swift         # Dynamic trend charts, daily averages & comparison picker
+├── CorrelationView.swift         # Custom bivariate regression & scatter plot tool
+├── InsightsView.swift            # Automated correlation discovery engine & suggestion search
 ├── SettingsView.swift            # Preferences & privacy
-├── Info.plist                    # HealthKit permissions
-└── Assets.xcassets/              # App icons & accent colors
+└── Assets.xcassets/              # App icon & accent colors
 ```
 
 ---
@@ -45,8 +47,9 @@ correlate-health/
 ### Example Screenshots
 
 <p float="left">
-<img src="example01.png" style="width:48%">
-<img src="example02.png" style="width:48%">
+<img src="example1.png" style="width:33%">
+<img src="example2.png" style="width:33%">
+<img src="example3.png" style="width:33%">
 </p>
 
 ---

@@ -1,6 +1,6 @@
 //
 //  HealthManager.swift
-//  Correlate
+//  Progress-Health
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
@@ -8,9 +8,10 @@
 import Foundation
 import HealthKit
 import SwiftUI
+import Combine
 
 // MARK: - Metric Category Definition
-enum MetricCategory: String, CaseIterable, Identifiable {
+enum MetricCategory: String, CaseIterable, Identifiable, Sendable {
     case activity = "Activity & Mobility"
     case vitals = "Vitals & Heart"
     case nutrition = "Nutrition"
@@ -31,13 +32,13 @@ enum MetricCategory: String, CaseIterable, Identifiable {
 }
 
 // MARK: - Metric Aggregation Style
-enum AggregationType {
-    case cumulativeSum  // Steps, calories, distance, water
+enum AggregationType: Sendable, Equatable {
+    case cumulativeSum   // Steps, calories, distance, water
     case averageDiscrete // Heart rate, HRV, weight, temperature
 }
 
 // MARK: - Health Metric Specification
-struct HealthMetricType: Identifiable, Hashable {
+struct HealthMetricType: Identifiable, Hashable, Sendable {
     let id: String
     let displayName: String
     let category: MetricCategory
@@ -503,6 +504,19 @@ struct HealthCatalog {
     ]
 }
 
+// MARK: - Cross-Tab Regression Navigation State
+struct RegressionSelection: Equatable {
+    let id = UUID()
+    let metric1Id: String
+    let transform1: TransformType
+    let metric2Id: String
+    let transform2: TransformType
+
+    static func == (lhs: RegressionSelection, rhs: RegressionSelection) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 // MARK: - HealthManager Class
 class HealthManager: ObservableObject {
     private let healthStore = HKHealthStore()
@@ -513,6 +527,10 @@ class HealthManager: ObservableObject {
     
     @Published var isAuthorized: Bool = false
     @Published var isLoading: Bool = false
+
+    // Tab Navigation State (0 = Dashboard, 1 = Insights, 2 = Regression, 3 = Settings)
+    @Published var selectedTab: Int = 0
+    @Published var pendingRegressionSelection: RegressionSelection? = nil
 
     func requestAuthorization() {
         guard HKHealthStore.isHealthDataAvailable() else {

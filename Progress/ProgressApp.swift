@@ -1,35 +1,40 @@
 //
-//  CorrelateApp.swift
-//  Correlate
+//  ProgressApp.swift
+//  Progress
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
+
 import SwiftUI
 import HealthKit
 
 @main
-struct CorrelateApp: App {
+struct ProgressApp: App {
     @StateObject private var healthManager = HealthManager()
 
     var body: some Scene {
         WindowGroup {
-            TabView {
+            TabView(selection: $healthManager.selectedTab) {
                 ContentView()
+                    .tag(0)
                     .tabItem {
                         Label("Dashboard", systemImage: "house")
                     }
 
                 InsightsView()
+                    .tag(1)
                     .tabItem {
                         Label("Insights", systemImage: "lightbulb")
                     }
 
                 CorrelationView()
+                    .tag(2)
                     .tabItem {
-                        Label("Correlate", systemImage: "chart.xyaxis.line")
+                        Label("Regression", systemImage: "chart.xyaxis.line")
                     }
 
                 SettingsView()
+                    .tag(3)
                     .tabItem {
                         Label("Settings", systemImage: "gear")
                     }

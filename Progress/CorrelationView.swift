@@ -1,6 +1,6 @@
 //
 //  CorrelationView.swift
-//  Correlate
+//  Progress
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
@@ -18,7 +18,6 @@ struct CorrelationView: View {
     @State private var metricId2: String = "bodyMass"
     @State private var transform2: TransformType = .delta7Day
 
-    // Time aggregation for scatter plots: Daily, Weekly, Monthly
     @State private var selectedGranularity: Calendar.Component = .day
 
     @State private var correlationResult: Double? = nil
@@ -54,7 +53,6 @@ struct CorrelationView: View {
         availableMetrics.first { $0.id == metricId2 } ?? availableMetrics[1]
     }
 
-    // Dynamic X scale tightly fit to data points (does not force 0)
     var xDomain: ClosedRange<Double> {
         let xs = pairedPoints.map(\.x)
         guard let minVal = xs.min(), let maxVal = xs.max(), minVal != maxVal else {
@@ -65,7 +63,6 @@ struct CorrelationView: View {
         return (minVal - padding)...(maxVal + padding)
     }
 
-    // Dynamic Y scale tightly fit to data points (does not force 0)
     var yDomain: ClosedRange<Double> {
         let ys = pairedPoints.map(\.y)
         guard let minVal = ys.min(), let maxVal = ys.max(), minVal != maxVal else {
@@ -83,7 +80,7 @@ struct CorrelationView: View {
                     // Variable Selector Card
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
-                            Text("Select Variables to Correlate")
+                            Text("Select Variables to Compare")
                                 .font(.headline)
                             Spacer()
                             Button(action: swapAxes) {
@@ -229,7 +226,7 @@ struct CorrelationView: View {
                         Button(action: computeCorrelation) {
                             HStack {
                                 Image(systemName: "chart.xyaxis.line")
-                                Text("Compute Correlation")
+                                Text("Compute Regression")
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -247,7 +244,6 @@ struct CorrelationView: View {
                     // Results Presentation
                     if let r = correlationResult, !pairedPoints.isEmpty {
                         VStack(alignment: .leading, spacing: 16) {
-                            // Score Card
                             HStack(alignment: .center) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Pearson Correlation (r)")
@@ -269,7 +265,6 @@ struct CorrelationView: View {
                             }
                             .padding(.bottom, 4)
 
-                            // Time Aggregation Picker for Scatter Plot
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("SCATTER PLOT TIME AGGREGATION")
                                     .font(.caption2.bold())
@@ -281,12 +276,11 @@ struct CorrelationView: View {
                                     Text("Monthly Average").tag(Calendar.Component.month)
                                 }
                                 .pickerStyle(SegmentedPickerStyle())
-                                .onChange(of: selectedGranularity) { _ in
+                                .onChange(of: selectedGranularity) {
                                     computeCorrelation()
                                 }
                             }
 
-                            // Scatter Plot
                             let xTitle = "\(metric1.displayName)\(transform1.shortSuffix) (\(metric1.unitLabel))\(aggregationSuffix)"
                             let yTitle = "\(metric2.displayName)\(transform2.shortSuffix) (\(metric2.unitLabel))\(aggregationSuffix)"
 
@@ -382,13 +376,27 @@ struct CorrelationView: View {
                 .padding(.vertical)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Correlation Tool")
+            .navigationTitle("Regression Tool")
             .onAppear {
+                applyPendingRegressionIfNeeded()
                 if correlationResult == nil {
                     computeCorrelation()
                 }
             }
+            .onChange(of: healthManager.pendingRegressionSelection) {
+                applyPendingRegressionIfNeeded()
+            }
         }
+    }
+
+    private func applyPendingRegressionIfNeeded() {
+        guard let pending = healthManager.pendingRegressionSelection else { return }
+        metricId1 = pending.metric1Id
+        transform1 = pending.transform1
+        metricId2 = pending.metric2Id
+        transform2 = pending.transform2
+        healthManager.pendingRegressionSelection = nil
+        computeCorrelation()
     }
 
     private var aggregationNoun: String {
@@ -441,7 +449,6 @@ struct CorrelationView: View {
         let s1 = TimeSeriesTransforms.transform(dailySeries: raw1, type: transform1, interpolateGaps: isDiscrete1)
         let s2 = TimeSeriesTransforms.transform(dailySeries: raw2, type: transform2, interpolateGaps: isDiscrete2)
 
-        // Compute Pearson correlation & regression on selected granularity (Daily, Weekly, Monthly)
         if let result = TimeSeriesTransforms.pearsonCorrelation(seriesA: s1, seriesB: s2, granularity: selectedGranularity) {
             correlationResult = result.r
             pairedPoints = result.points

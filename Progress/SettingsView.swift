@@ -1,6 +1,6 @@
 //
 //  SettingsView.swift
-//  Correlate
+//  Progress-Health
 //
 //  Created by Blake Rayvid on 4/12/25.
 //
