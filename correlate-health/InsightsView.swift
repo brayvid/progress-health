@@ -220,7 +220,6 @@ struct InsightFilters {
             return true
         }
 
-        // Prune comparing any linear combination with its direct constituent metrics
         for spec in LinearCombinationsCatalog.specs {
             if (metricA == spec.id && spec.constituentMetricIds.contains(metricB)) ||
                (metricB == spec.id && spec.constituentMetricIds.contains(metricA)) {
@@ -794,7 +793,7 @@ struct InsightsView: View {
                 }
             }
 
-            // 2. Synthesize Linear Combinations (Caloric Deficit, Net Carbs, Heart Rate Delta, etc.)
+            // 2. Synthesize Linear Combinations & Scaled Composites
             for spec in LinearCombinationsCatalog.specs {
                 if let comboDaily = LinearCombinationsCatalog.computeSeries(spec: spec, dailySeries: healthManager.dailySeries) {
                     let syntheticMetric = HealthMetricType(
@@ -818,7 +817,7 @@ struct InsightsView: View {
                         comboDaily
                     ))
 
-                    // B. 1-Day & 7-Day Derivatives of the Linear Combination
+                    // B. 1-Day & 7-Day Derivatives
                     let delta1 = TimeSeriesTransforms.transform(dailySeries: comboDaily, type: .delta1Day, interpolateGaps: false)
                     if delta1.count >= 3 {
                         candidateFeatures.append((
@@ -980,13 +979,14 @@ struct TagView: View {
     }
 }
 
-// MARK: - Detail Modal for Surfaced Insight
+// MARK: - Detail Modal with Time Aggregation & Swap Axes
 struct InsightDetailModal: View {
     let insight: DiscoveredInsight
     @Environment(\.dismiss) var dismiss
 
-    // Local flip state
+    // Local states
     @State private var isAxesFlipped: Bool = false
+    @State private var selectedGranularity: Calendar.Component = .day
 
     var currentXTitle: String {
         isAxesFlipped ? insight.titleB : insight.titleA
@@ -1004,13 +1004,65 @@ struct InsightDetailModal: View {
         isAxesFlipped ? insight.metricA.unitLabel : insight.metricB.unitLabel
     }
 
-    // Active plotted points with optional coordinate swap
-    var activePoints: [(date: Date, x: Double, y: Double)] {
-        if isAxesFlipped {
-            return insight.points.map { ($0.date, $0.y, $0.x) }
-        } else {
-            return insight.points
+    var granularitySuffix: String {
+        switch selectedGranularity {
+        case .month: return " [Monthly Avg]"
+        case .weekOfYear: return " [Weekly Avg]"
+        default: return ""
         }
+    }
+
+    var granularityNoun: String {
+        switch selectedGranularity {
+        case .month: return "months"
+        case .weekOfYear: return "weeks"
+        default: return "days"
+        }
+    }
+
+    // Dynamic points aggregated by selected time period
+    var activePoints: [(date: Date, x: Double, y: Double)] {
+        let basePoints = insight.points
+        let orientedPoints: [(date: Date, x: Double, y: Double)]
+        if isAxesFlipped {
+            orientedPoints = basePoints.map { ($0.date, $0.y, $0.x) }
+        } else {
+            orientedPoints = basePoints
+        }
+
+        if selectedGranularity == .day {
+            return orientedPoints
+        }
+
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: orientedPoints) { pt -> Date in
+            calendar.dateInterval(of: selectedGranularity, for: pt.date)?.start ?? pt.date
+        }
+
+        var results: [(date: Date, x: Double, y: Double)] = []
+        for (bucketDate, pts) in grouped {
+            guard !pts.isEmpty else { continue }
+            let avgX = pts.map(\.x).reduce(0, +) / Double(pts.count)
+            let avgY = pts.map(\.y).reduce(0, +) / Double(pts.count)
+            results.append((bucketDate, avgX, avgY))
+        }
+        return results.sorted { $0.date < $1.date }
+    }
+
+    var dynamicR: Double {
+        let pts = activePoints
+        guard pts.count >= 2 else { return insight.r }
+        let xs = pts.map(\.x)
+        let ys = pts.map(\.y)
+        let n = Double(pts.count)
+        let sumX = xs.reduce(0, +)
+        let sumY = ys.reduce(0, +)
+        let sumXY = zip(xs, ys).map(*).reduce(0, +)
+        let sumX2 = xs.map { $0 * $0 }.reduce(0, +)
+        let sumY2 = ys.map { $0 * $0 }.reduce(0, +)
+        let num = (n * sumXY) - (sumX * sumY)
+        let den = sqrt(max((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY), 0))
+        return den > 0 ? (num / den) : insight.r
     }
 
     var xDomain: ClosedRange<Double> {
@@ -1082,10 +1134,10 @@ struct InsightDetailModal: View {
                         HStack {
                             Text("Correlation:")
                                 .foregroundColor(.secondary)
-                            Text(String(format: "%+.3f", insight.r))
+                            Text(String(format: "%+.3f", dynamicR))
                                 .bold()
-                                .foregroundColor(insight.r >= 0 ? .green : .red)
-                            Text("(\(insight.sampleSize) matched days)")
+                                .foregroundColor(dynamicR >= 0 ? .green : .red)
+                            Text("(\(activePoints.count) matching \(granularityNoun))")
                                 .foregroundColor(.secondary)
                         }
                         .font(.subheadline)
@@ -1095,11 +1147,29 @@ struct InsightDetailModal: View {
                     .background(Color(.secondarySystemGroupedBackground))
                     .cornerRadius(12)
 
+                    // Granularity Selector
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("SCATTER PLOT TIME AGGREGATION")
+                            .font(.caption2.bold())
+                            .foregroundColor(.secondary)
+
+                        Picker("Granularity", selection: $selectedGranularity) {
+                            Text("Daily").tag(Calendar.Component.day)
+                            Text("Weekly Average").tag(Calendar.Component.weekOfYear)
+                            Text("Monthly Average").tag(Calendar.Component.month)
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
+                    }
+                    .padding(.horizontal)
+
                     // Scatter Plot fitted directly to data domain
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Scatter & Linear Fit")
                             .font(.headline)
                             .padding(.horizontal)
+
+                        let xLabel = "\(currentXTitle) (\(currentXUnit))\(granularitySuffix)"
+                        let yLabel = "\(currentYTitle) (\(currentYUnit))\(granularitySuffix)"
 
                         Chart {
                             ForEach(Array(activePoints.enumerated()), id: \.offset) { _, pt in
@@ -1155,8 +1225,8 @@ struct InsightDetailModal: View {
                                 }
                             }
                         }
-                        .chartXAxisLabel("\(currentXTitle) (\(currentXUnit))", alignment: .center)
-                        .chartYAxisLabel("\(currentYTitle) (\(currentYUnit))", position: .leading)
+                        .chartXAxisLabel(xLabel, alignment: .center)
+                        .chartYAxisLabel(yLabel, position: .leading)
                         .frame(height: 290)
                         .padding()
                         .background(Color(.secondarySystemGroupedBackground))
@@ -1170,10 +1240,10 @@ struct InsightDetailModal: View {
 
                         let m1 = currentXTitle
                         let m2 = currentYTitle
-                        let dir = insight.r > 0 ? "increases" : "decreases"
-                        let strength = abs(insight.r) >= 0.6 ? "strong" : "moderate"
+                        let dir = dynamicR > 0 ? "increases" : "decreases"
+                        let strength = abs(dynamicR) >= 0.6 ? "strong" : "moderate"
 
-                        Text("Our analysis uncovered a \(strength) statistical relationship between \(m1) and \(m2). Days with higher values of \(m1) tend to associate with \(dir) in \(m2).")
+                        Text("Our analysis uncovered a \(strength) statistical relationship between \(m1) and \(m2). When \(m1) increases, \(m2) tendentially \(dir) across \(selectedGranularity == .day ? "daily observations" : "aggregated periods").")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
 

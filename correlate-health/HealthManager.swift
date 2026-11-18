@@ -507,12 +507,8 @@ struct HealthCatalog {
 class HealthManager: ObservableObject {
     private let healthStore = HKHealthStore()
     
-    // Raw samples storage keyed by Metric ID
     @Published var samplesByMetricId: [String: [HKQuantitySample]] = [:]
-    // Category samples (Sleep, Mindfulness)
     @Published var categorySamplesByMetricId: [String: [HKCategorySample]] = [:]
-    
-    // Aggregated Daily Series cache: [MetricID: [Date: Double]]
     @Published var dailySeries: [String: [Date: Double]] = [:]
     
     @Published var isAuthorized: Bool = false
@@ -587,7 +583,6 @@ class HealthManager: ObservableObject {
         group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
             guard let self = self else { return }
             
-            // Build daily aggregated values for every metric
             var newDailySeries: [String: [Date: Double]] = [:]
             let calendar = Calendar.current
             
@@ -596,7 +591,14 @@ class HealthManager: ObservableObject {
                     let grouped = Dictionary(grouping: samples) { calendar.startOfDay(for: $0.startDate) }
                     var dayMap: [Date: Double] = [:]
                     for (day, daySamples) in grouped {
-                        let values = daySamples.map { $0.quantity.doubleValue(for: metric.defaultUnit) }
+                        var values = daySamples.map { $0.quantity.doubleValue(for: metric.defaultUnit) }
+                        
+                        // FIX: HealthKit stores percentages (Body Fat, SpO2, Asymmetry) as 0.0 - 1.0 (e.g. 0.30 for 30%).
+                        // Multiply by 100 so it reads, displays, and computes accurately as 30.0% instead of 0.3%.
+                        if metric.defaultUnit == .percent() {
+                            values = values.map { $0 * 100.0 }
+                        }
+
                         if metric.aggregation == .cumulativeSum {
                             dayMap[day] = values.reduce(0, +)
                         } else {
@@ -611,7 +613,6 @@ class HealthManager: ObservableObject {
                         var totalSeconds: Double = 0
                         for s in daySamples {
                             if metric.id == "sleepDuration" {
-                                // Only count actual sleep states (asleepUnspecified, core, deep, rem)
                                 if #available(iOS 16.0, *) {
                                     if s.value == HKCategoryValueSleepAnalysis.asleepCore.rawValue ||
                                        s.value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue ||
@@ -649,7 +650,6 @@ class HealthManager: ObservableObject {
         }
     }
 
-    // Helper for time aggregation
     func aggregateSeries(metric: HealthMetricType, granularity: Calendar.Component) -> [(date: Date, value: Double)] {
         guard let dayData = dailySeries[metric.id], !dayData.isEmpty else { return [] }
         if granularity == .day {

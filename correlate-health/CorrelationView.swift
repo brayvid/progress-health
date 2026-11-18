@@ -12,11 +12,14 @@ import HealthKit
 struct CorrelationView: View {
     @EnvironmentObject var healthManager: HealthManager
 
-    @State private var metricId1: String = "netCaloricBalance"
+    @State private var metricId1: String = "dietMinusActive"
     @State private var transform1: TransformType = .raw
 
     @State private var metricId2: String = "bodyMass"
     @State private var transform2: TransformType = .delta7Day
+
+    // Time aggregation for scatter plots: Daily, Weekly, Monthly
+    @State private var selectedGranularity: Calendar.Component = .day
 
     @State private var correlationResult: Double? = nil
     @State private var pairedPoints: [(date: Date, x: Double, y: Double)] = []
@@ -83,7 +86,6 @@ struct CorrelationView: View {
                             Text("Select Variables to Correlate")
                                 .font(.headline)
                             Spacer()
-                            // Swap X & Y Button
                             Button(action: swapAxes) {
                                 HStack(spacing: 4) {
                                     Image(systemName: "arrow.up.arrow.down")
@@ -105,7 +107,6 @@ struct CorrelationView: View {
                                 .foregroundColor(.secondary)
 
                             VStack(spacing: 6) {
-                                // Metric Selector Button
                                 Menu {
                                     Picker("Metric 1", selection: $metricId1) {
                                         ForEach(availableMetrics) { m in
@@ -132,7 +133,6 @@ struct CorrelationView: View {
                                     .cornerRadius(8)
                                 }
 
-                                // Transform Selector Button
                                 Menu {
                                     Picker("Transform 1", selection: $transform1) {
                                         ForEach(TransformType.allCases) { t in
@@ -170,7 +170,6 @@ struct CorrelationView: View {
                                 .foregroundColor(.secondary)
 
                             VStack(spacing: 6) {
-                                // Metric Selector Button
                                 Menu {
                                     Picker("Metric 2", selection: $metricId2) {
                                         ForEach(availableMetrics) { m in
@@ -197,7 +196,6 @@ struct CorrelationView: View {
                                     .cornerRadius(8)
                                 }
 
-                                // Transform Selector Button
                                 Menu {
                                     Picker("Transform 2", selection: $transform2) {
                                         ForEach(TransformType.allCases) { t in
@@ -264,16 +262,33 @@ struct CorrelationView: View {
                                     Text(strengthDescription(r))
                                         .font(.subheadline.bold())
                                         .foregroundColor(rColor(r))
-                                    Text("\(pairedPoints.count) matching days")
+                                    Text("\(pairedPoints.count) \(aggregationNoun)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
                             }
                             .padding(.bottom, 4)
 
-                            // Scatter Plot fitted to data
-                            let xTitle = "\(metric1.displayName)\(transform1.shortSuffix) (\(metric1.unitLabel))"
-                            let yTitle = "\(metric2.displayName)\(transform2.shortSuffix) (\(metric2.unitLabel))"
+                            // Time Aggregation Picker for Scatter Plot
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("SCATTER PLOT TIME AGGREGATION")
+                                    .font(.caption2.bold())
+                                    .foregroundColor(.secondary)
+
+                                Picker("Aggregation", selection: $selectedGranularity) {
+                                    Text("Daily").tag(Calendar.Component.day)
+                                    Text("Weekly Average").tag(Calendar.Component.weekOfYear)
+                                    Text("Monthly Average").tag(Calendar.Component.month)
+                                }
+                                .pickerStyle(SegmentedPickerStyle())
+                                .onChange(of: selectedGranularity) { _ in
+                                    computeCorrelation()
+                                }
+                            }
+
+                            // Scatter Plot
+                            let xTitle = "\(metric1.displayName)\(transform1.shortSuffix) (\(metric1.unitLabel))\(aggregationSuffix)"
+                            let yTitle = "\(metric2.displayName)\(transform2.shortSuffix) (\(metric2.unitLabel))\(aggregationSuffix)"
 
                             Chart {
                                 ForEach(Array(pairedPoints.enumerated()), id: \.offset) { _, pt in
@@ -282,10 +297,9 @@ struct CorrelationView: View {
                                         y: .value(yTitle, pt.y)
                                     )
                                     .foregroundStyle(Color.blue.opacity(0.65))
-                                    .symbolSize(30)
+                                    .symbolSize(32)
                                 }
 
-                                // Linear Regression Trendline fit across actual observed xMin...xMax
                                 if let reg = linearRegression(points: pairedPoints) {
                                     LineMark(
                                         x: .value("X", reg.xMin),
@@ -335,7 +349,6 @@ struct CorrelationView: View {
                             .frame(height: 320)
                             .padding(.vertical, 8)
 
-                            // Summary Interpretation
                             Text(explanationText(r: r, m1: metric1.displayName + transform1.shortSuffix, m2: metric2.displayName + transform2.shortSuffix))
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
@@ -355,7 +368,7 @@ struct CorrelationView: View {
                                 .foregroundColor(.orange)
                             Text("Insufficient Overlapping Data")
                                 .font(.headline)
-                            Text("Both metrics require at least 4 shared calendar days of records.")
+                            Text("Both metrics require overlapping calendar periods of records.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -375,6 +388,22 @@ struct CorrelationView: View {
                     computeCorrelation()
                 }
             }
+        }
+    }
+
+    private var aggregationNoun: String {
+        switch selectedGranularity {
+        case .month: return "matching months"
+        case .weekOfYear: return "matching weeks"
+        default: return "matching days"
+        }
+    }
+
+    private var aggregationSuffix: String {
+        switch selectedGranularity {
+        case .month: return " [Monthly Avg]"
+        case .weekOfYear: return " [Weekly Avg]"
+        default: return ""
         }
     }
 
@@ -412,7 +441,8 @@ struct CorrelationView: View {
         let s1 = TimeSeriesTransforms.transform(dailySeries: raw1, type: transform1, interpolateGaps: isDiscrete1)
         let s2 = TimeSeriesTransforms.transform(dailySeries: raw2, type: transform2, interpolateGaps: isDiscrete2)
 
-        if let result = TimeSeriesTransforms.pearsonCorrelation(seriesA: s1, seriesB: s2) {
+        // Compute Pearson correlation & regression on selected granularity (Daily, Weekly, Monthly)
+        if let result = TimeSeriesTransforms.pearsonCorrelation(seriesA: s1, seriesB: s2, granularity: selectedGranularity) {
             correlationResult = result.r
             pairedPoints = result.points
         } else {
@@ -456,7 +486,7 @@ struct CorrelationView: View {
     private func explanationText(r: Double, m1: String, m2: String) -> String {
         let absR = abs(r)
         if absR < 0.2 {
-            return "No meaningful statistical link observed between \(m1) and \(m2) in your data."
+            return "No meaningful statistical link observed between \(m1) and \(m2) across this time period."
         }
         let dirWord = r > 0 ? "increases" : "decreases"
         return "When \(m1) increases, \(m2) tendentially \(dirWord) (r = \(String(format: "%.2f", r))). This represents a \(strengthDescription(r).lowercased()) relationship."
