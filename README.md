@@ -47,9 +47,9 @@ Progress/
 ### Example Screenshots
 
 <p float="left">
-<img src="example1.png" style="width:33%">
-<img src="example2.png" style="width:33%">
-<img src="example3.png" style="width:33%">
+<img src="example1.png" style="width:32%">
+<img src="example2.png" style="width:32%">
+<img src="example3.png" style="width:32%">
 </p>
 
 ---
